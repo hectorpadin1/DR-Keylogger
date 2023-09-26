@@ -5,8 +5,8 @@ import double_ratchet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.backends import default_backend
+from os import system
 import base64
-import sys
 
 
 ratchet = double_ratchet.Ratchet()
@@ -46,8 +46,11 @@ def log_message(message):
 class MyServer(BaseHTTPRequestHandler):
 
     def __init__(self, *args, **kwargs):
-        self.__client = None
+        self.client = None
         super().__init__(*args, **kwargs)
+    
+    def log_message(self, format, *args):
+        return
 
     def __set_response(self):
         path = self.path.replace('/','')
@@ -66,24 +69,18 @@ class MyServer(BaseHTTPRequestHandler):
         #logging.info("GET request,\nPath: %s\nHeaders:\n%s\n", str(self.path), str(self.headers))
         if self.path == '/auth':
             pass
-        elif (self.path == '/login') and (self.__client is None):
-            self.__client = self.client_address
+        elif (self.path == '/login'):
+            f_path = "logs/" + self.client_address[0]
             key = str(self.headers).split('Session:')[1]
             pubkey = base64.b64decode(key.encode('ascii'))
             logging.info("Client: %s", self.client_address)
-            logging.info("New key received")
+            system("date >> "+f_path+";echo 'Client connected' >> " + f_path)
             pair_comm(pubkey)
             with open('auth', 'w') as f:
                 f.write(get_public_key().decode('ascii'))
-        elif self.path == '/home':
-            b64_msg = str(self.headers).split('Session:')[1]
-            enc_msg = base64.b64decode(b64_msg.encode('ascii'))
-            msg = decrypt(enc_msg)
-            print('Received message: ' + msg)
-            log_message(msg)
-            update_ratchet()
         elif self.path == '/logout':
-            self.__client = None
+            f_path = "logs/" + self.client_address[0]
+            print("Client %s disconnected", self.client_address[0])
             reinit_ratchet()
         self.__set_response()
 
@@ -91,14 +88,14 @@ class MyServer(BaseHTTPRequestHandler):
         content_length = int(self.headers['Content-Length']) # <--- Gets the size of data
         #logging.info("POST request,\nPath: %s\nHeaders:\n%s\n\nBody:\n%s\n", str(self.path), str(self.headers), post_data.decode('utf-8'))
         if self.path == '/home':
+            f_path = "logs/" + self.client_address[0]
             b64_msg = self.rfile.read(content_length) # <--- Gets the data itself
             enc_msg = base64.b64decode(b64_msg)
             msg = decrypt(enc_msg)
-            print('Received message: ' + msg)
-            log_message(msg)
+            print(self.client_address[0] + ': ' + msg)
+            system("date >> "+f_path+";echo '"+msg+"' >> " + f_path)
             update_ratchet()
         self.__set_response()
-        #self.wfile.write("POST request for {}".format(self.path).encode('utf-8'))
 
 
 def run(server_class=HTTPServer, handler_class=MyServer, port=8080):

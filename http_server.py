@@ -7,9 +7,17 @@ from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.backends import default_backend
 from os import system
 import base64
+from secrets import token_urlsafe
 
+'''
+TODO: fully support multiclient
+'''
+
+SERVER_IP = "localhost"
+SERVER_PORT = 8000
 
 ratchet = double_ratchet.Ratchet()
+clients = []
 
 
 def get_public_key() -> bytes:
@@ -27,20 +35,16 @@ def pair_comm(pubkey: bytes) -> None:
     dhpub: dh.DHPublicKey = serialization.load_pem_public_key(pubkey, backend=default_backend())
     ratchet.pairComm(dhpub)
 
-def update_ratchet() -> None:
+def update_ratchet(token: str) -> None:
     global ratchet
     ratchet.updateDH()
     ratchet.getPublicKey().decode('utf-8')
-    with open('auth', 'w') as f:
+    with open(token, 'w') as f:
         f.write(get_public_key().decode('ascii'))
 
 def reinit_ratchet() -> None:
     global ratchet
     ratchet = double_ratchet.Ratchet()
-
-def log_message(message):
-    with open('keys.log', 'a') as f:
-        f.write(message + '\n')
 
 
 class MyServer(BaseHTTPRequestHandler):
@@ -66,41 +70,60 @@ class MyServer(BaseHTTPRequestHandler):
             self.send_error(404,'File Not Found: %s' % self.path)
 
     def do_GET(self):
-        #logging.info("GET request,\nPath: %s\nHeaders:\n%s\n", str(self.path), str(self.headers))
-        if self.path == '/auth':
-            pass
-        elif (self.path == '/login'):
-            f_path = "logs/" + self.client_address[0]
+        global clients
+        ip = self.client_address[0]
+        f_path = "logs/" + ip
+        if (self.path == '/login'):
+            # received a new connection
+            if not any(ip in cp for cp in clients):
+                clients.append({ip, token_urlsafe(16)})
+                print("Client connected: ", ip)
+                system("date >> "+f_path+";echo 'Client connected' >> " + f_path)
+            # old connections can call login endpoint to renew their keys
+            # update/create the client key
+            print("Renewing keys")
             key = str(self.headers).split('Session:')[1]
             pubkey = base64.b64decode(key.encode('ascii'))
-            logging.info("Client: %s", self.client_address)
-            system("date >> "+f_path+";echo 'Client connected' >> " + f_path)
             pair_comm(pubkey)
-            with open('auth', 'w') as f:
+            # just update the public key under a the random client endpoint
+            token = list([d for d in clients if ip in d][0])[1]
+            with open(token, 'w') as f:
                 f.write(get_public_key().decode('ascii'))
+            # send endpoint to client
+            self.send_response(200)
+            self.send_header('Content-type','text/html')
+            self.send_header('Location', token)
+            self.end_headers()
+            self.wfile.write(bytes(token, 'ascii'))
+
         elif self.path == '/logout':
-            f_path = "logs/" + self.client_address[0]
-            print("Client %s disconnected", self.client_address[0])
+            # client disconnected due to an error
+            clients = [d for d in clients if ip not in d]
+            print("Client disconnected: ", ip)
             reinit_ratchet()
+            system("date >> "+f_path+";echo 'Client disconnected' >> " + f_path)
         self.__set_response()
 
     def do_POST(self):
+        global clients
+        ip = self.client_address[0]
         content_length = int(self.headers['Content-Length']) # <--- Gets the size of data
         #logging.info("POST request,\nPath: %s\nHeaders:\n%s\n\nBody:\n%s\n", str(self.path), str(self.headers), post_data.decode('utf-8'))
         if self.path == '/home':
-            f_path = "logs/" + self.client_address[0]
+            f_path = "logs/" + ip
             b64_msg = self.rfile.read(content_length) # <--- Gets the data itself
             enc_msg = base64.b64decode(b64_msg)
             msg = decrypt(enc_msg)
-            print(self.client_address[0] + ': ' + msg)
+            print(ip + ': ' + msg)
             system("date >> "+f_path+";echo '"+msg+"' >> " + f_path)
-            update_ratchet()
+            token = list([d for d in clients if ip in d][0])[1]
+            update_ratchet(token)
         self.__set_response()
 
 
-def run(server_class=HTTPServer, handler_class=MyServer, port=8080):
+def run(server_class=HTTPServer, handler_class=MyServer):
     logging.basicConfig(level=logging.INFO)
-    server_address = ('', port)
+    server_address = (SERVER_IP, SERVER_PORT)
     httpd = server_class(server_address, handler_class)
     logging.info('Starting httpd...\n')
     try:
@@ -111,9 +134,4 @@ def run(server_class=HTTPServer, handler_class=MyServer, port=8080):
     logging.info('Stopping httpd...\n')
 
 
-from sys import argv
-
-if len(argv) == 2:
-    run(port=int(argv[1]))
-else:
-    run()
+run()

